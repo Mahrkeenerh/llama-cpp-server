@@ -143,3 +143,47 @@ class ModelManager:
                 "config": model_data["config"]
             }
         return status
+
+    def update_config(self, new_config):
+        """Update configuration and reload model registry."""
+        with self.global_lock:
+            self.config = new_config
+
+            # Get current and new model names
+            current_models = set(self.models.keys())
+            new_models = set(new_config["models"].keys())
+
+            # Remove models that are no longer in config
+            for model_name in current_models - new_models:
+                logger.info(f"Removing model from registry: {model_name}")
+                self.unload_model(model_name)
+                del self.models[model_name]
+                del self.locks[model_name]
+
+            # Add new models
+            for model_name in new_models - current_models:
+                logger.info(f"Adding new model to registry: {model_name}")
+                self.models[model_name] = {
+                    "instance": None,
+                    "last_used": 0,
+                    "config": new_config["models"][model_name]
+                }
+                self.locks[model_name] = threading.Lock()
+
+            # Update existing models' configs (keep loaded instances)
+            for model_name in current_models & new_models:
+                self.models[model_name]["config"] = new_config["models"][model_name]
+
+            # Update default model
+            self.default_model = None
+            for model_name, model_config in new_config["models"].items():
+                if model_config.get("default", False):
+                    self.default_model = model_name
+                    break
+
+            if not self.default_model and self.models:
+                self.default_model = list(self.models.keys())[0]
+
+            logger.info(f"Configuration updated. Active models: {len(self.models)}")
+            if self.default_model:
+                logger.info(f"Default model: {self.default_model}")

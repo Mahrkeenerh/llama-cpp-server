@@ -41,6 +41,11 @@ sudo systemctl start llama-cpp-server
 sudo systemctl status llama-cpp-server
 ```
 
+Restart after config changes:
+```bash
+sudo systemctl restart llama-cpp-server
+```
+
 View logs:
 ```bash
 sudo journalctl -u llama-cpp-server -f
@@ -63,6 +68,11 @@ curl http://localhost:8080/health
 **Unload:**
 ```bash
 curl -X POST http://localhost:8080/admin/unload -H "Content-Type: application/json" -d '{"model": "all"}'
+```
+
+**Reload config:**
+```bash
+curl -X POST http://localhost:8080/admin/reload
 ```
 
 ## OpenAI Client Integration

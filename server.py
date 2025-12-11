@@ -233,6 +233,33 @@ def admin_unload():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/admin/reload', methods=['POST'])
+def admin_reload():
+    """Reload configuration without restarting the server."""
+    try:
+        global config, model_manager
+
+        # Load new configuration
+        new_config = load_config("config.json")
+
+        # Update global config
+        config = new_config
+
+        # Update model manager with new config
+        model_manager.update_config(new_config)
+
+        logger.info("Configuration reloaded successfully")
+        return jsonify({
+            "status": "success",
+            "message": "Configuration reloaded successfully",
+            "config": new_config
+        })
+
+    except Exception as e:
+        logger.error(f"Error in admin_reload: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def main():
     """Initialize and run the server."""
     global model_manager, config
