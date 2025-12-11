@@ -1,0 +1,4 @@
+Flask==3.0.3
+Flask-CORS==4.0.1
+llama-cpp-python==0.2.85
+python-dotenv==1.0.1
