@@ -17,28 +17,49 @@ class ModelManager:
         self.locks = {}
         self.global_lock = threading.Lock()
 
-        # Initialize model registry from config
-        for model_name, model_config in config["models"].items():
-            self.models[model_name] = {
-                "instance": None,
-                "last_used": 0,
-                "config": model_config
-            }
-            self.locks[model_name] = threading.Lock()
-
-        # Determine default model
-        self.default_model = None
-        for model_name, model_config in config["models"].items():
-            if model_config.get("default", False):
-                self.default_model = model_name
-                break
-
-        if not self.default_model and self.models:
-            self.default_model = list(self.models.keys())[0]
+        # Discover models from directory
+        self._discover_models()
 
         logger.info(f"ModelManager initialized with {len(self.models)} models")
         if self.default_model:
             logger.info(f"Default model: {self.default_model}")
+
+    def _discover_models(self):
+        """Discover all .gguf files in the models directory."""
+        models_dir = self.config["model_manager"]["models_directory"]
+
+        if not os.path.exists(models_dir):
+            logger.error(f"Models directory does not exist: {models_dir}")
+            self.default_model = None
+            return
+
+        # Find all .gguf files
+        gguf_files = [f for f in os.listdir(models_dir) if f.endswith('.gguf')]
+
+        if not gguf_files:
+            logger.warning(f"No .gguf files found in {models_dir}")
+            self.default_model = None
+            return
+
+        # Create model entries
+        for filename in sorted(gguf_files):
+            model_name = filename.replace('.gguf', '')
+            if model_name not in self.models:
+                self.models[model_name] = {
+                    "instance": None,
+                    "last_used": 0,
+                    "filename": filename
+                }
+                self.locks[model_name] = threading.Lock()
+
+        # Set default model
+        default_filename = self.config["model_manager"].get("default_model")
+        if default_filename:
+            self.default_model = default_filename.replace('.gguf', '')
+        else:
+            self.default_model = list(self.models.keys())[0] if self.models else None
+
+        logger.info(f"Discovered {len(gguf_files)} models: {', '.join(sorted(gguf_files))}")
 
     def get_model(self, model_name=None):
         """Get model instance, loading it if necessary."""
@@ -56,22 +77,28 @@ class ModelManager:
                 logger.info(f"Loading model: {model_name}")
                 model_path = os.path.join(
                     self.config["model_manager"]["models_directory"],
-                    model_data["config"]["file"]
+                    model_data["filename"]
                 )
 
                 if not os.path.exists(model_path):
                     raise FileNotFoundError(f"Model file not found: {model_path}")
 
+                # Use global settings from config
                 start_time = time.time()
-                model_data["instance"] = Llama(
-                    model_path=model_path,
-                    n_ctx=model_data["config"]["n_ctx"],
-                    n_gpu_layers=model_data["config"]["n_gpu_layers"],
-                    n_threads=model_data["config"].get("n_threads", 8),
-                    verbose=False
-                )
-                load_time = time.time() - start_time
-                logger.info(f"Model '{model_name}' loaded in {load_time:.2f}s")
+                try:
+                    model_data["instance"] = Llama(
+                        model_path=model_path,
+                        n_ctx=self.config["model_manager"]["n_ctx"],
+                        n_gpu_layers=self.config["model_manager"]["n_gpu_layers"],
+                        n_threads=self.config["model_manager"].get("n_threads", 8),
+                        verbose=False
+                    )
+                    load_time = time.time() - start_time
+                    logger.info(f"Model '{model_name}' loaded in {load_time:.2f}s")
+                except Exception as e:
+                    logger.error(f"Failed to load model '{model_name}': {e}", exc_info=True)
+                    logger.error(f"Model config: n_ctx={self.config['model_manager']['n_ctx']}, n_gpu_layers={self.config['model_manager']['n_gpu_layers']}, n_threads={self.config['model_manager'].get('n_threads', 8)}")
+                    raise ValueError(f"Failed to create llama_context: {e}")
 
             # Update last used timestamp
             model_data["last_used"] = time.time()
@@ -140,50 +167,55 @@ class ModelManager:
             status[model_name] = {
                 "loaded": model_data["instance"] is not None,
                 "last_used": model_data["last_used"],
-                "config": model_data["config"]
+                "filename": model_data["filename"]
             }
         return status
 
     def update_config(self, new_config):
-        """Update configuration and reload model registry."""
+        """Update configuration and rediscover models from directory."""
         with self.global_lock:
+            # Store current models
+            current_models = set(self.models.keys())
+
+            # Update config
             self.config = new_config
 
-            # Get current and new model names
-            current_models = set(self.models.keys())
-            new_models = set(new_config["models"].keys())
+            # Rediscover models from directory
+            models_dir = self.config["model_manager"]["models_directory"]
+            if not os.path.exists(models_dir):
+                logger.error(f"Models directory does not exist: {models_dir}")
+                return
 
-            # Remove models that are no longer in config
+            # Find all .gguf files
+            gguf_files = [f for f in os.listdir(models_dir) if f.endswith('.gguf')]
+            new_models = set(f.replace('.gguf', '') for f in gguf_files)
+
+            # Remove models that are no longer in directory
             for model_name in current_models - new_models:
-                logger.info(f"Removing model from registry: {model_name}")
+                logger.info(f"Removing model from registry (file deleted): {model_name}")
                 self.unload_model(model_name)
                 del self.models[model_name]
                 del self.locks[model_name]
 
-            # Add new models
+            # Add new models found in directory
             for model_name in new_models - current_models:
-                logger.info(f"Adding new model to registry: {model_name}")
+                filename = model_name + '.gguf'
+                logger.info(f"Adding new model to registry: {filename}")
                 self.models[model_name] = {
                     "instance": None,
                     "last_used": 0,
-                    "config": new_config["models"][model_name]
+                    "filename": filename
                 }
                 self.locks[model_name] = threading.Lock()
 
-            # Update existing models' configs (keep loaded instances)
-            for model_name in current_models & new_models:
-                self.models[model_name]["config"] = new_config["models"][model_name]
-
             # Update default model
-            self.default_model = None
-            for model_name, model_config in new_config["models"].items():
-                if model_config.get("default", False):
-                    self.default_model = model_name
-                    break
-
-            if not self.default_model and self.models:
-                self.default_model = list(self.models.keys())[0]
+            default_filename = self.config["model_manager"].get("default_model")
+            if default_filename:
+                self.default_model = default_filename.replace('.gguf', '')
+            else:
+                self.default_model = list(self.models.keys())[0] if self.models else None
 
             logger.info(f"Configuration updated. Active models: {len(self.models)}")
             if self.default_model:
                 logger.info(f"Default model: {self.default_model}")
+            logger.info(f"Discovered models: {', '.join(sorted(f + '.gguf' for f in self.models.keys()))}")

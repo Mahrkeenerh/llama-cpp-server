@@ -6,18 +6,12 @@
     "log_level": "INFO"
   },
   "model_manager": {
+    "models_directory": "/mnt/DataShare/Models/LLM",
     "idle_timeout": 300,
     "check_interval": 60,
-    "models_directory": "/mnt/DataShare/Models/LLM"
-  },
-  "models": {
-    "qwen3-14b-q6_K": {
-      "file": "Qwen3-14B-Q6_K.gguf",
-      "n_ctx": 32768,
-      "n_gpu_layers": -1,
-      "n_threads": 8,
-      "temperature": 0.7,
-      "default": true
-    }
+    "n_ctx": 16384,
+    "n_gpu_layers": -1,
+    "n_threads": 8,
+    "default_model": "Qwen3-8B-Q8_0.gguf"
   }
 }

@@ -20,9 +20,22 @@ Choose installation type (CPU/CUDA/Metal) when prompted.
 ## Configuration
 
 Edit `config.json`:
-- `models_directory`: Path to .gguf files
-- `models`: Model registry with settings
+
+**Server settings:**
+- `host`: Server bind address (default: 127.0.0.1)
+- `port`: Server port (default: 8080)
+- `cors_origins`: Allowed CORS origins
+
+**Model Manager settings:**
+- `models_directory`: Path to directory containing .gguf files (auto-discovers all models)
 - `idle_timeout`: Seconds before auto-unload (default: 300)
+- `check_interval`: Seconds between idle checks (default: 60)
+- `n_ctx`: Context window size (default: 40960)
+- `n_gpu_layers`: GPU layers to offload (0=CPU only, -1=all layers)
+- `n_threads`: CPU threads for inference
+- `default_model`: Default model filename (e.g., "Qwen3-14B-Q6_K.gguf")
+
+**Note:** All .gguf files in `models_directory` are automatically discovered. Temperature is set via API calls, not config.
 
 ## Usage
 
@@ -57,7 +70,7 @@ sudo journalctl -u llama-cpp-server -f
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3-14b-q6_K", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "Qwen3-14B-Q6_K", "messages": [{"role": "user", "content": "Hello"}], "temperature": 0.7}'
 ```
 
 **Health:**
@@ -70,9 +83,14 @@ curl http://localhost:8080/health
 curl -X POST http://localhost:8080/admin/unload -H "Content-Type: application/json" -d '{"model": "all"}'
 ```
 
-**Reload config:**
+**Reload config (rediscovers models in directory):**
 ```bash
 curl -X POST http://localhost:8080/admin/reload
+```
+
+**List models:**
+```bash
+curl http://localhost:8080/v1/models
 ```
 
 ## OpenAI Client Integration
@@ -82,7 +100,8 @@ from openai import OpenAI
 
 client = OpenAI(base_url='http://localhost:8080/v1', api_key='not-needed')
 response = client.chat.completions.create(
-    model="qwen3-14b-q6_K",
-    messages=[{"role": "user", "content": "Hello"}]
+    model="Qwen3-14B-Q6_K",  # or "Qwen3-8B-Q6_K", "Qwen3-8B-Q8_0"
+    messages=[{"role": "user", "content": "Hello"}],
+    temperature=0.7
 )
 ```
