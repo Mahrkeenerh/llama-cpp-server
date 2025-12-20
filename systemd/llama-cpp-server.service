@@ -1,0 +1,15 @@
+[Unit]
+Description=llama.cpp Inference Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Data/Programs/AI/llama-cpp-server
+ExecStart=%h/Data/Programs/AI/llama-cpp-server/venv/bin/python server.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
