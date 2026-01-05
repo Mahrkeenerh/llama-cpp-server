@@ -5,7 +5,7 @@ import json
 import logging
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-from model_manager import ModelManager
+from model_proxy import ModelProxyManager
 from tasks import start_idle_monitor
 
 # Setup logging
@@ -113,32 +113,30 @@ def format_openai_response(response, model_name):
     }
 
 
-def generate_stream(llm, prompt, temperature, max_tokens):
-    """Generate streaming response."""
-    stream = llm(
-        prompt,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True
-    )
+def generate_stream(proxy, prompt, temperature, max_tokens, model_name):
+    """Generate streaming response via subprocess."""
+    try:
+        for chunk_data in proxy.generate_stream(prompt, temperature, max_tokens):
+            chunk = {
+                "id": f"chatcmpl-{int(time.time())}",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "content": chunk_data["text"]
+                    },
+                    "finish_reason": chunk_data.get("finish_reason")
+                }]
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
 
-    for output in stream:
-        chunk = {
-            "id": f"chatcmpl-{int(time.time())}",
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "local",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "content": output["choices"][0]["text"]
-                },
-                "finish_reason": output["choices"][0].get("finish_reason")
-            }]
-        }
-        yield f"data: {json.dumps(chunk)}\n\n"
-
-    yield "data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
+    except Exception as e:
+        logger.error(f"Streaming error: {e}", exc_info=True)
+        error_chunk = {"error": str(e)}
+        yield f"data: {json.dumps(error_chunk)}\n\n"
 
 
 @app.route('/v1/chat/completions', methods=['POST'])
@@ -155,12 +153,12 @@ def chat_completions():
         if not messages:
             return jsonify({"error": "messages field is required"}), 400
 
-        # Get model (loads if needed)
+        # Get model proxy (spawns subprocess if needed)
         try:
-            llm = model_manager.get_model(model_name)
+            proxy = model_manager.get_model(model_name)
         except ValueError as e:
             return jsonify({"error": str(e)}), 404
-        except FileNotFoundError as e:
+        except (RuntimeError, TimeoutError) as e:
             return jsonify({"error": str(e)}), 500
 
         # Convert messages to prompt
@@ -168,11 +166,15 @@ def chat_completions():
 
         if stream:
             return Response(
-                stream_with_context(generate_stream(llm, prompt, temperature, max_tokens)),
+                stream_with_context(generate_stream(proxy, prompt, temperature, max_tokens, model_name)),
                 content_type='text/event-stream'
             )
         else:
-            response = llm(prompt, temperature=temperature, max_tokens=max_tokens)
+            result = proxy.generate(prompt, temperature=temperature, max_tokens=max_tokens)
+            response = {
+                "choices": [{"text": result["text"], "finish_reason": result.get("finish_reason", "stop")}],
+                "usage": result.get("usage", {})
+            }
             return jsonify(format_openai_response(response, model_name))
 
     except Exception as e:
@@ -281,8 +283,8 @@ def main():
     # Setup CORS
     CORS(app, origins=config["server"]["cors_origins"])
 
-    # Initialize model manager
-    model_manager = ModelManager(config)
+    # Initialize model manager (subprocess-based)
+    model_manager = ModelProxyManager(config)
 
     # Start background tasks
     start_idle_monitor(
