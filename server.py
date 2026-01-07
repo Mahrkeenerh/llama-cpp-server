@@ -288,6 +288,99 @@ def stop_generation():
         return jsonify({"error": str(e)}), 500
 
 
+# Cache for standalone tokenizer (loaded from GGUF without full model)
+_standalone_tokenizer = None
+_standalone_tokenizer_model = None
+
+
+def get_standalone_tokenizer():
+    """Get a standalone tokenizer without loading the full model."""
+    global _standalone_tokenizer, _standalone_tokenizer_model
+
+    if _standalone_tokenizer is not None:
+        return _standalone_tokenizer, _standalone_tokenizer_model
+
+    # Use the default model's GGUF file for tokenizer
+    default_model = model_manager.default_model
+    if default_model and default_model in model_manager.models:
+        model_path = model_manager.models[default_model]["path"]
+        try:
+            from llama_cpp import Llama
+            # Load with minimal settings - just need tokenizer
+            _standalone_tokenizer = Llama(
+                model_path=model_path,
+                n_ctx=32,  # Minimal context
+                n_gpu_layers=0,  # CPU only
+                vocab_only=True,  # Only load vocabulary, not weights
+                verbose=False
+            )
+            _standalone_tokenizer_model = default_model
+            logger.info(f"Loaded standalone tokenizer from {default_model}")
+            return _standalone_tokenizer, _standalone_tokenizer_model
+        except Exception as e:
+            logger.warning(f"Failed to load standalone tokenizer: {e}")
+
+    return None, None
+
+
+@app.route('/v1/tokenize', methods=['POST'])
+def tokenize():
+    """Tokenize text and return token count using the currently loaded model's tokenizer.
+
+    Note: This does NOT switch models - it uses whatever model is currently loaded.
+    For model families that share tokenizers (e.g., Qwen3 Q4/Q6/Q8), this gives accurate
+    counts regardless of which variant is loaded. The n_ctx returned is for the REQUESTED
+    model (from config), not necessarily the loaded model.
+
+    If no model is loaded, uses a lightweight standalone tokenizer (vocab-only).
+    """
+    try:
+        data = request.json
+        text = data.get("text", "")
+        requested_model = data.get("model", model_manager.default_model)
+        add_bos = data.get("add_bos", False)
+
+        if not text:
+            return jsonify({"error": "text field is required"}), 400
+
+        tokenizer_model = None
+        tokens = []
+
+        # Use the CURRENTLY LOADED model for tokenization (don't switch models)
+        if model_manager.active_proxy is not None and model_manager.active_proxy.is_alive():
+            # Use the loaded model's tokenizer
+            result = model_manager.active_proxy.tokenize(text, add_bos=add_bos)
+            tokens = result.get("tokens", [])
+            tokenizer_model = model_manager.active_model
+        else:
+            # No model loaded - use standalone tokenizer
+            standalone, standalone_model = get_standalone_tokenizer()
+            if standalone is not None:
+                tokens = standalone.tokenize(text.encode('utf-8'), add_bos=add_bos)
+                tokenizer_model = f"{standalone_model} (vocab-only)"
+            else:
+                return jsonify({"error": "No model loaded and failed to load standalone tokenizer"}), 500
+
+        # Get n_ctx for the REQUESTED model from config (not the loaded model)
+        requested_n_ctx = config["model_manager"]["n_ctx"]
+        model_settings = config.get("model_settings", {}).get(requested_model, {})
+        if "n_ctx" in model_settings:
+            requested_n_ctx = model_settings["n_ctx"]
+
+        return jsonify({
+            "model": requested_model,
+            "tokenizer_model": tokenizer_model,
+            "text": text,
+            "tokens": tokens,
+            "token_count": len(tokens),
+            "n_ctx": requested_n_ctx
+        })
+
+    except Exception as e:
+        logger.error(f"Error in tokenize: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def main():
     """Initialize and run the server."""
     global model_manager, config

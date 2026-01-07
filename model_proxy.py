@@ -148,6 +148,31 @@ class ModelProxy:
                 except EOFError:
                     raise RuntimeError("Model worker crashed unexpectedly (likely out of memory - try a smaller model or quantization)")
 
+    def tokenize(self, text: str, add_bos: bool = False) -> dict:
+        """Tokenize text and return token count."""
+        with self.lock:
+            if not self.is_alive():
+                raise RuntimeError("Subprocess not running")
+
+            self.last_used = time.time()
+
+            request = Request(
+                command=Command.TOKENIZE,
+                payload={
+                    "text": text,
+                    "add_bos": add_bos
+                }
+            )
+            self.conn.send(request)
+
+            if self.conn.poll(timeout=30):
+                response = self.conn.recv()
+                if response.type == ResponseType.ERROR:
+                    raise RuntimeError(response.payload.get("error", "Unknown error"))
+                return response.payload
+            else:
+                raise TimeoutError("Tokenize timeout")
+
     def stop_generation(self):
         """Signal the worker to stop current generation."""
         if self.stop_event:

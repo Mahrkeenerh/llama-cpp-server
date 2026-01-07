@@ -60,6 +60,8 @@ class ModelWorker:
                 self._handle_generate(request)
             elif request.command == Command.GENERATE_STREAM:
                 self._handle_stream(request)
+            elif request.command == Command.TOKENIZE:
+                self._handle_tokenize(request)
             elif request.command == Command.STATUS:
                 self._handle_status(request)
             elif request.command == Command.SHUTDOWN:
@@ -186,6 +188,32 @@ class ModelWorker:
             id=request.id,
             type=ResponseType.DONE,
             payload={"finish_reason": "stop" if stopped else "stop"}
+        ))
+
+    def _handle_tokenize(self, request: Request):
+        """Tokenize text and return token count."""
+        if self.llm is None:
+            self.conn.send(Response(
+                id=request.id,
+                type=ResponseType.ERROR,
+                payload={"error": "Model not loaded"}
+            ))
+            return
+
+        text = request.payload.get("text", "")
+        add_bos = request.payload.get("add_bos", False)
+
+        # Tokenize the text using llama-cpp-python's tokenize method
+        tokens = self.llm.tokenize(text.encode('utf-8'), add_bos=add_bos)
+
+        self.conn.send(Response(
+            id=request.id,
+            type=ResponseType.RESULT,
+            payload={
+                "tokens": tokens,
+                "token_count": len(tokens),
+                "n_ctx": self.llm.n_ctx()
+            }
         ))
 
     def _handle_status(self, request: Request):

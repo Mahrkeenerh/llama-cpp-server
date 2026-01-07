@@ -10,6 +10,7 @@ class Command(Enum):
     LOAD = "load"
     GENERATE = "generate"
     GENERATE_STREAM = "generate_stream"
+    TOKENIZE = "tokenize"
     STATUS = "status"
     SHUTDOWN = "shutdown"
     HEARTBEAT = "heartbeat"
