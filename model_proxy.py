@@ -47,13 +47,27 @@ class ModelProxy:
 
     def _send_load_command(self):
         """Send LOAD command to subprocess."""
+        # Get default settings from model_manager
+        n_ctx = self.config["model_manager"]["n_ctx"]
+        n_gpu_layers = self.config["model_manager"]["n_gpu_layers"]
+        n_threads = self.config["model_manager"].get("n_threads", 8)
+
+        # Check for per-model settings
+        model_settings = self.config.get("model_settings", {}).get(self.model_name, {})
+        if "n_ctx" in model_settings:
+            n_ctx = model_settings["n_ctx"]
+        if "n_gpu_layers" in model_settings:
+            n_gpu_layers = model_settings["n_gpu_layers"]
+        if "n_threads" in model_settings:
+            n_threads = model_settings["n_threads"]
+
         request = Request(
             command=Command.LOAD,
             payload={
                 "model_path": self.model_path,
-                "n_ctx": self.config["model_manager"]["n_ctx"],
-                "n_gpu_layers": self.config["model_manager"]["n_gpu_layers"],
-                "n_threads": self.config["model_manager"].get("n_threads", 8)
+                "n_ctx": n_ctx,
+                "n_gpu_layers": n_gpu_layers,
+                "n_threads": n_threads
             }
         )
         self.conn.send(request)
@@ -115,17 +129,20 @@ class ModelProxy:
             self.conn.send(request)
 
             while True:
-                if self.conn.poll(timeout=60):
-                    response = self.conn.recv()
+                try:
+                    if self.conn.poll(timeout=60):
+                        response = self.conn.recv()
 
-                    if response.type == ResponseType.CHUNK:
-                        yield response.payload
-                    elif response.type == ResponseType.DONE:
-                        break
-                    elif response.type == ResponseType.ERROR:
-                        raise RuntimeError(response.payload.get("error", "Unknown error"))
-                else:
-                    raise TimeoutError("Streaming timeout")
+                        if response.type == ResponseType.CHUNK:
+                            yield response.payload
+                        elif response.type == ResponseType.DONE:
+                            break
+                        elif response.type == ResponseType.ERROR:
+                            raise RuntimeError(response.payload.get("error", "Unknown error"))
+                    else:
+                        raise TimeoutError("Streaming timeout")
+                except EOFError:
+                    raise RuntimeError("Model worker crashed unexpectedly (likely out of memory - try a smaller model or quantization)")
 
     def shutdown(self):
         """Gracefully shutdown subprocess - releases CUDA memory."""
