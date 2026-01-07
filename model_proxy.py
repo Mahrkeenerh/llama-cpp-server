@@ -23,6 +23,7 @@ class ModelProxy:
         self.conn = None
         self.lock = threading.Lock()
         self.last_used = 0
+        self.stop_event: Optional[multiprocessing.Event] = None
 
     def start(self):
         """Start the subprocess and load the model."""
@@ -33,10 +34,11 @@ class ModelProxy:
 
         parent_conn, child_conn = multiprocessing.Pipe()
         self.conn = parent_conn
+        self.stop_event = multiprocessing.Event()
 
         self.process = multiprocessing.Process(
             target=worker_main,
-            args=(child_conn, self.model_name, self.config),
+            args=(child_conn, self.model_name, self.config, self.stop_event),
             daemon=False
         )
         self.process.start()
@@ -116,6 +118,8 @@ class ModelProxy:
             if not self.is_alive():
                 raise RuntimeError("Subprocess not running")
 
+            # Clear any previous stop signal
+            self.clear_stop()
             self.last_used = time.time()
 
             request = Request(
@@ -143,6 +147,17 @@ class ModelProxy:
                         raise TimeoutError("Streaming timeout")
                 except EOFError:
                     raise RuntimeError("Model worker crashed unexpectedly (likely out of memory - try a smaller model or quantization)")
+
+    def stop_generation(self):
+        """Signal the worker to stop current generation."""
+        if self.stop_event:
+            self.stop_event.set()
+            logger.info(f"Stop signal sent to model: {self.model_name}")
+
+    def clear_stop(self):
+        """Clear the stop signal for new generation."""
+        if self.stop_event:
+            self.stop_event.clear()
 
     def shutdown(self):
         """Gracefully shutdown subprocess - releases CUDA memory."""
@@ -259,6 +274,14 @@ class ModelProxyManager:
                 self.active_model = None
                 return True
 
+            return False
+
+    def stop_generation(self) -> bool:
+        """Stop current generation on active model."""
+        with self.lock:
+            if self.active_proxy is not None:
+                self.active_proxy.stop_generation()
+                return True
             return False
 
     def unload_all_models(self) -> int:

@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 class ModelWorker:
     """Runs in subprocess, owns Llama instance and CUDA memory."""
 
-    def __init__(self, pipe_conn, model_name: str, config: dict):
+    def __init__(self, pipe_conn, model_name: str, config: dict, stop_event=None):
         self.conn = pipe_conn
         self.model_name = model_name
         self.config = config
         self.llm = None
+        self.stop_event = stop_event
 
     def run(self):
         """Main loop - listen for commands, execute, respond."""
@@ -164,7 +165,14 @@ class ModelWorker:
             stream=True
         )
 
+        stopped = False
         for output in stream:
+            # Check if stop was requested
+            if self.stop_event and self.stop_event.is_set():
+                logger.info("Generation stopped by user")
+                stopped = True
+                break
+
             text = output["choices"][0]["text"]
             finish_reason = output["choices"][0].get("finish_reason")
 
@@ -177,7 +185,7 @@ class ModelWorker:
         self.conn.send(Response(
             id=request.id,
             type=ResponseType.DONE,
-            payload={"finish_reason": "stop"}
+            payload={"finish_reason": "stop" if stopped else "stop"}
         ))
 
     def _handle_status(self, request: Request):
@@ -211,7 +219,7 @@ class ModelWorker:
         ))
 
 
-def worker_main(pipe_conn, model_name: str, config: dict):
+def worker_main(pipe_conn, model_name: str, config: dict, stop_event=None):
     """Entry point called by multiprocessing.Process."""
-    worker = ModelWorker(pipe_conn, model_name, config)
+    worker = ModelWorker(pipe_conn, model_name, config, stop_event)
     worker.run()

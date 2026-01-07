@@ -273,6 +273,21 @@ def admin_reload():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/v1/stop', methods=['POST'])
+def stop_generation():
+    """Stop the current generation."""
+    try:
+        stopped = model_manager.stop_generation()
+        if stopped:
+            logger.info("Generation stop requested")
+            return jsonify({"status": "success", "message": "Stop signal sent"})
+        else:
+            return jsonify({"status": "success", "message": "No active generation to stop"})
+    except Exception as e:
+        logger.error(f"Error in stop_generation: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def main():
     """Initialize and run the server."""
     global model_manager, config
