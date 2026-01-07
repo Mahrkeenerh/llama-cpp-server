@@ -3,6 +3,15 @@ import os
 import time
 import json
 import logging
+import multiprocessing
+
+# Use 'spawn' instead of 'fork' to avoid CUDA context issues with subprocesses
+# This must be done before any CUDA operations or imports that touch CUDA
+try:
+    multiprocessing.set_start_method('spawn')
+except RuntimeError:
+    pass  # Already set
+
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from model_proxy import ModelProxyManager
@@ -307,12 +316,14 @@ def get_standalone_tokenizer():
         try:
             from llama_cpp import Llama
             # Load with minimal settings - just need tokenizer
+            # Use n_gpu_layers=0 to keep it CPU-only and avoid GPU conflicts
             _standalone_tokenizer = Llama(
                 model_path=model_path,
                 n_ctx=32,  # Minimal context
-                n_gpu_layers=0,  # CPU only
+                n_gpu_layers=0,  # CPU only - important!
                 vocab_only=True,  # Only load vocabulary, not weights
-                verbose=False
+                verbose=False,
+                use_mmap=True,  # Memory-map to reduce RAM usage
             )
             _standalone_tokenizer_model = default_model
             logger.info(f"Loaded standalone tokenizer from {default_model}")
@@ -346,12 +357,21 @@ def tokenize():
         tokenizer_model = None
         tokens = []
 
+        # Check if a model is currently loading - if so, don't load standalone tokenizer
+        if model_manager.loading:
+            return jsonify({"error": "Model is loading, please wait"}), 503
+
         # Use the CURRENTLY LOADED model for tokenization (don't switch models)
-        if model_manager.active_proxy is not None and model_manager.active_proxy.is_alive():
+        proxy = model_manager.active_proxy
+        if proxy is not None and model_manager.active_model is not None and proxy.is_alive():
             # Use the loaded model's tokenizer
-            result = model_manager.active_proxy.tokenize(text, add_bos=add_bos)
-            tokens = result.get("tokens", [])
-            tokenizer_model = model_manager.active_model
+            try:
+                result = proxy.tokenize(text, add_bos=add_bos)
+                tokens = result.get("tokens", [])
+                tokenizer_model = model_manager.active_model
+            except Exception as e:
+                logger.warning(f"Failed to tokenize with loaded model: {e}")
+                return jsonify({"error": f"Tokenization failed: {e}"}), 500
         else:
             # No model loaded - use standalone tokenizer
             standalone, standalone_model = get_standalone_tokenizer()

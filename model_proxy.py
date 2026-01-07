@@ -224,6 +224,7 @@ class ModelProxyManager:
         self.active_proxy: Optional[ModelProxy] = None
         self.active_model: Optional[str] = None
         self.default_model: Optional[str] = None
+        self.loading = False  # True while a model is being loaded
 
         self._discover_models()
 
@@ -281,8 +282,12 @@ class ModelProxyManager:
                 model_path=model_info["path"],
                 config=self.config
             )
-            self.active_proxy.start()
-            self.active_model = model_name
+            self.loading = True
+            try:
+                self.active_proxy.start()
+                self.active_model = model_name
+            finally:
+                self.loading = False
 
             return self.active_proxy
 
