@@ -96,15 +96,21 @@ class ModelWorker:
         n_ctx = request.payload.get("n_ctx", 4096)
         n_gpu_layers = request.payload.get("n_gpu_layers", -1)
         n_threads = request.payload.get("n_threads", 8)
+        override_tensor = request.payload.get("override_tensor", None)
+        offload_kqv = request.payload.get("offload_kqv", True)
 
         logger.info(f"Loading model: {model_path}")
-        logger.info(f"Config: n_ctx={n_ctx}, n_gpu_layers={n_gpu_layers}, n_threads={n_threads}")
+        logger.info(f"Config: n_ctx={n_ctx}, n_gpu_layers={n_gpu_layers}, n_threads={n_threads}, offload_kqv={offload_kqv}")
+        if override_tensor:
+            logger.info(f"Tensor override: {override_tensor}")
 
         self.llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
             n_threads=n_threads,
+            override_tensor=override_tensor,
+            offload_kqv=offload_kqv,
             verbose=False
         )
 

@@ -53,6 +53,8 @@ class ModelProxy:
         n_ctx = self.config["model_manager"]["n_ctx"]
         n_gpu_layers = self.config["model_manager"]["n_gpu_layers"]
         n_threads = self.config["model_manager"].get("n_threads", 8)
+        override_tensor = self.config["model_manager"].get("override_tensor", None)
+        offload_kqv = self.config["model_manager"].get("offload_kqv", True)
 
         # Check for per-model settings
         model_settings = self.config.get("model_settings", {}).get(self.model_name, {})
@@ -62,6 +64,10 @@ class ModelProxy:
             n_gpu_layers = model_settings["n_gpu_layers"]
         if "n_threads" in model_settings:
             n_threads = model_settings["n_threads"]
+        if "override_tensor" in model_settings:
+            override_tensor = model_settings["override_tensor"]
+        if "offload_kqv" in model_settings:
+            offload_kqv = model_settings["offload_kqv"]
 
         request = Request(
             command=Command.LOAD,
@@ -69,7 +75,9 @@ class ModelProxy:
                 "model_path": self.model_path,
                 "n_ctx": n_ctx,
                 "n_gpu_layers": n_gpu_layers,
-                "n_threads": n_threads
+                "n_threads": n_threads,
+                "override_tensor": override_tensor,
+                "offload_kqv": offload_kqv
             }
         )
         self.conn.send(request)
@@ -134,7 +142,7 @@ class ModelProxy:
 
             while True:
                 try:
-                    if self.conn.poll(timeout=60):
+                    if self.conn.poll(timeout=180):
                         response = self.conn.recv()
 
                         if response.type == ResponseType.CHUNK:
@@ -229,7 +237,7 @@ class ModelProxyManager:
         self._discover_models()
 
     def _discover_models(self):
-        """Discover all .gguf files in the models directory."""
+        """Discover all .gguf files in the models directory and register aliases."""
         models_dir = self.config["model_manager"]["models_directory"]
 
         if not os.path.exists(models_dir):
@@ -242,12 +250,29 @@ class ModelProxyManager:
             logger.warning(f"No .gguf files found in {models_dir}")
             return
 
+        # Register models from .gguf files
         for filename in sorted(gguf_files):
             model_name = filename.replace('.gguf', '')
             self.models[model_name] = {
                 "filename": filename,
                 "path": os.path.join(models_dir, filename)
             }
+
+        # Register virtual models (aliases) from model_settings with "file" field
+        model_settings = self.config.get("model_settings", {})
+        aliases_added = []
+        for alias_name, settings in model_settings.items():
+            if "file" in settings:
+                filename = settings["file"]
+                filepath = os.path.join(models_dir, filename)
+                if os.path.exists(filepath):
+                    self.models[alias_name] = {
+                        "filename": filename,
+                        "path": filepath
+                    }
+                    aliases_added.append(alias_name)
+                else:
+                    logger.warning(f"Alias '{alias_name}' references missing file: {filename}")
 
         default_filename = self.config["model_manager"].get("default_model")
         if default_filename:
@@ -256,6 +281,8 @@ class ModelProxyManager:
             self.default_model = list(self.models.keys())[0] if self.models else None
 
         logger.info(f"Discovered {len(gguf_files)} models: {', '.join(sorted(gguf_files))}")
+        if aliases_added:
+            logger.info(f"Registered {len(aliases_added)} aliases: {', '.join(sorted(aliases_added))}")
         if self.default_model:
             logger.info(f"Default model: {self.default_model}")
 
@@ -286,6 +313,11 @@ class ModelProxyManager:
             try:
                 self.active_proxy.start()
                 self.active_model = model_name
+            except Exception:
+                # Clean up on failure to prevent orphaned proxy
+                self.active_proxy = None
+                self.active_model = None
+                raise
             finally:
                 self.loading = False
 

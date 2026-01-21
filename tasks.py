@@ -17,7 +17,7 @@ def monitor_idle_models(model_manager, interval, timeout):
             time.sleep(interval)
             unloaded = model_manager.unload_idle_models(timeout)
             if unloaded:
-                logger.info(f"Auto-unloaded models: {', '.join(unloaded)}")
+                logger.info(f"Auto-unloaded models: {', '.join(m for m in unloaded if m)}")
         except Exception as e:
             logger.error(f"Error in idle model monitor: {e}", exc_info=True)
 
