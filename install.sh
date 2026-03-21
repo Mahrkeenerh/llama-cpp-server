@@ -69,6 +69,12 @@ mkdir -p ~/.config/systemd/user
 ln -sf "$SCRIPT_DIR/systemd/llama-cpp-server.service" ~/.config/systemd/user/
 systemctl --user daemon-reload
 
+# Enable linger so user services start at boot without login
+if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
+    echo "Enabling linger for $USER (allows service to start at boot without login)..."
+    loginctl enable-linger "$USER"
+fi
+
 echo ""
 echo "=== Installation complete ==="
 echo ""
