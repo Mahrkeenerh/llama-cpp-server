@@ -1,67 +1,60 @@
 # llama-cpp-server
 
-OpenAI-compatible inference server using llama.cpp with automatic model management.
+OpenAI-compatible inference server using native llama-server from llama.cpp with automatic model management.
 
 ## Features
 
-- OpenAI-compatible API (`/v1/chat/completions`)
-- Lazy model loading + auto-unload after 5 min idle
-- Streaming and non-streaming responses
-- GPU acceleration support
+- Full OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`)
+- Lazy model loading + auto-unload after idle timeout
+- Concurrent requests with continuous batching
+- Flash attention enabled by default
+- GPU acceleration (CUDA / Metal)
+- Model aliases with per-model configuration
+- CORS proxy for browser-based clients
 
 ## Setup
 
 ```bash
-./setup.sh
+./install.sh
 ```
 
-Choose installation type (CPU/CUDA/Metal) when prompted.
+Choose build type (CPU/CUDA/Metal) when prompted. This clones llama.cpp and builds the `llama-server` binary.
 
 ## Configuration
 
 Edit `config.json`:
 
 **Server settings:**
-- `host`: Server bind address (default: 127.0.0.1)
-- `port`: Server port (default: 8080)
-- `cors_origins`: Allowed CORS origins
+- `host`: Bind address (default: 127.0.0.1)
+- `port`: Public port (default: 8080)
 
 **Model Manager settings:**
 - `models_directory`: Path to directory containing .gguf files (auto-discovers all models)
 - `idle_timeout`: Seconds before auto-unload (default: 300)
-- `check_interval`: Seconds between idle checks (default: 60)
-- `n_ctx`: Context window size (default: 40960)
-- `n_gpu_layers`: GPU layers to offload (0=CPU only, -1=all layers)
+- `n_ctx`: Default context window size (default: 16384)
+- `n_gpu_layers`: GPU layers to offload (-1=all, 0=CPU only)
 - `n_threads`: CPU threads for inference
-- `default_model`: Default model filename (e.g., "Qwen3-14B-Q6_K.gguf")
+- `override_tensor`: Tensor override pattern for MoE models (e.g., `.ffn_.*_exps.=CPU`)
+- `offload_kqv`: KV cache placement (true=GPU, false=CPU)
 
-**Note:** All .gguf files in `models_directory` are automatically discovered. Temperature is set via API calls, not config.
+**Per-model overrides** (`model_settings`):
+- Override any default per model name
+- Add `"file"` field to create aliases pointing to the same .gguf with different settings
+
+Config changes take effect on service restart.
 
 ## Usage
 
 **Development:**
 ```bash
-source venv/bin/activate
-python server.py
+python3 launcher.py
 ```
 
-**Production (systemd):**
+**Production (systemd user service):**
 ```bash
-sudo cp llama-cpp-server.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable llama-cpp-server
-sudo systemctl start llama-cpp-server
-sudo systemctl status llama-cpp-server
-```
-
-Restart after config changes:
-```bash
-sudo systemctl restart llama-cpp-server
-```
-
-View logs:
-```bash
-sudo journalctl -u llama-cpp-server -f
+systemctl --user start llama-cpp-server
+systemctl --user restart llama-cpp-server
+journalctl --user -u llama-cpp-server -f
 ```
 
 ## API Examples
@@ -70,7 +63,7 @@ sudo journalctl -u llama-cpp-server -f
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "Qwen3-14B-Q6_K", "messages": [{"role": "user", "content": "Hello"}], "temperature": 0.7}'
+  -d '{"model": "Qwen3-8B-Q8_0", "messages": [{"role": "user", "content": "Hello"}], "temperature": 0.7}'
 ```
 
 **Health:**
@@ -78,19 +71,15 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 curl http://localhost:8080/health
 ```
 
-**Unload:**
-```bash
-curl -X POST http://localhost:8080/admin/unload -H "Content-Type: application/json" -d '{"model": "all"}'
-```
-
-**Reload config (rediscovers models in directory):**
-```bash
-curl -X POST http://localhost:8080/admin/reload
-```
-
 **List models:**
 ```bash
 curl http://localhost:8080/v1/models
+```
+
+**Load/unload models:**
+```bash
+curl -X POST http://localhost:8080/models/load -d '{"model": "Qwen3-8B-Q8_0"}'
+curl -X POST http://localhost:8080/models/unload -d '{"model": "Qwen3-8B-Q8_0"}'
 ```
 
 ## OpenAI Client Integration
@@ -100,8 +89,17 @@ from openai import OpenAI
 
 client = OpenAI(base_url='http://localhost:8080/v1', api_key='not-needed')
 response = client.chat.completions.create(
-    model="Qwen3-14B-Q6_K",  # or "Qwen3-8B-Q6_K", "Qwen3-8B-Q8_0"
+    model="Qwen3-8B-Q8_0",
     messages=[{"role": "user", "content": "Hello"}],
     temperature=0.7
 )
+```
+
+## Updating
+
+To get support for new model architectures:
+
+```bash
+./install.sh
+systemctl --user restart llama-cpp-server
 ```

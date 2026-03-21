@@ -2,457 +2,195 @@
 
 ## Overview
 
-llama-cpp-server is an OpenAI-compatible LLM inference server built on llama.cpp. It provides a REST API compatible with OpenAI's chat completions format, with features including lazy model loading, automatic model unloading after idle timeout, streaming responses, and GPU acceleration support.
+llama-cpp-server is an OpenAI-compatible LLM inference server using the native llama-server binary from llama.cpp. A thin Python launcher reads config.json, generates model presets, and runs a CORS reverse proxy in front of llama-server.
 
 ## Architecture
 
-### Main Components
+### Components
 
-- **server.py** - Flask-based REST API server providing OpenAI-compatible endpoints
-- **model_manager.py** - Handles model loading, unloading, and lifecycle management
-- **tasks.py** - Background task for monitoring idle models and auto-unloading
-- **config.json** - Server and model manager configuration
+- **launcher.py** — Reads config.json, generates models.preset INI, starts llama-server (port 8081) and CORS proxy (port 8080)
+- **bin/llama-server** — Native llama.cpp binary handling all inference and OpenAI API endpoints
+- **config.json** — Server and model configuration (single source of truth)
+- **models.preset** — Generated at launch from config.json (consumed by llama-server)
 
 ### Key Features
 
-- Lazy loading: Models are only loaded when first requested
-- Auto-unload: Models unload after configurable idle timeout (default 5 minutes)
-- Multi-model: Discovers all .gguf files in configured models directory
-- GPU offloading: Configurable number of layers to offload to GPU
+- Lazy loading: Models load on first request (`--models-autoload`)
+- Auto-unload: Models unload after idle timeout (`--sleep-idle-seconds`)
+- Multi-model: Discovers all .gguf files via `--models-dir`
+- Concurrent requests: Parallel slots with continuous batching
+- Flash attention enabled by default
+- CORS proxy for browser-based clients
 
 ### External Dependencies
 
-- llama-cpp-python (Python bindings for llama.cpp)
-- Flask, Flask-CORS
+- Python 3 (stdlib only, no pip packages)
+- llama.cpp (built from source, stored in vendor/)
 - GGUF model files (stored separately in models_directory)
+- cmake (for building from source)
+- CUDA toolkit (for GPU acceleration)
 
 ## Quick Commands
 
 ### Service Management
 
 ```bash
-# Start service
 systemctl --user start llama-cpp-server
-
-# Stop service
 systemctl --user stop llama-cpp-server
-
-# Restart service
 systemctl --user restart llama-cpp-server
-
-# Check status
 systemctl --user status llama-cpp-server
-
-# Enable on login
 systemctl --user enable llama-cpp-server
-
-# Disable on login
-systemctl --user disable llama-cpp-server
 ```
 
 ### View Logs
 
 ```bash
-# Follow logs in real-time
 journalctl --user -u llama-cpp-server -f
-
-# View last 100 lines
 journalctl --user -u llama-cpp-server -n 100
-
-# View logs since boot
-journalctl --user -u llama-cpp-server -b
-
-# View logs from specific time
 journalctl --user -u llama-cpp-server --since "1 hour ago"
 ```
 
 ### Check Port Usage
 
 ```bash
-# Check if port 8080 is in use
-sudo ss -tlnp | grep :8080
-
-# Find process using port 8080
-sudo lsof -i :8080
+ss -tlnp | grep -E ':808[01]'
 ```
 
 ## Configuration
 
 ### File Location
 
-`/home/samo/Data/Programs/AI/llama-cpp-server/config.json`
+`config.json` in the project root.
 
 ### Key Settings
 
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `server.host` | Bind address | 127.0.0.1 |
-| `server.port` | Server port | 8080 |
-| `server.cors_origins` | Allowed CORS origins | ["http://localhost:5000"] |
-| `model_manager.models_directory` | Path to .gguf model files | /mnt/DataShare/Models/LLM |
+| `server.port` | Public proxy port | 8080 |
+| `model_manager.models_directory` | Path to .gguf files | /mnt/DataShare/Models/LLM |
 | `model_manager.idle_timeout` | Seconds before auto-unload | 300 |
-| `model_manager.check_interval` | Seconds between idle checks | 60 |
-| `model_manager.n_ctx` | Context window size | 16384 |
-| `model_manager.n_gpu_layers` | GPU layers (-1=all, 0=none) | -1 |
+| `model_manager.n_ctx` | Default context window | 16384 |
+| `model_manager.n_gpu_layers` | GPU layers (-1=all) | -1 |
 | `model_manager.n_threads` | CPU threads | 8 |
-| `model_manager.default_model` | Default model filename | Qwen3-8B-Q8_0.gguf |
-
-### Example Configuration
-
-```json
-{
-  "server": {
-    "host": "127.0.0.1",
-    "port": 8080,
-    "cors_origins": ["http://localhost:5000"],
-    "log_level": "INFO"
-  },
-  "model_manager": {
-    "models_directory": "/mnt/DataShare/Models/LLM",
-    "idle_timeout": 300,
-    "check_interval": 60,
-    "n_ctx": 16384,
-    "n_gpu_layers": -1,
-    "n_threads": 8,
-    "default_model": "Qwen3-8B-Q8_0.gguf"
-  }
-}
-```
+| `model_manager.override_tensor` | Tensor override pattern | null |
+| `model_manager.offload_kqv` | KV cache on GPU | true |
+| `model_settings.<name>` | Per-model overrides | {} |
 
 ### After Changing Config
 
 ```bash
-# Restart to apply changes
 systemctl --user restart llama-cpp-server
-
-# Or hot-reload via API (rediscovers models, updates settings)
-curl -X POST http://localhost:8080/admin/reload
 ```
+
+Config changes take effect on restart (launcher regenerates models.preset).
 
 ## Troubleshooting
 
 ### Service won't start
 
-**Symptoms:** `systemctl --user status` shows "failed" or "activating"
-
-**Diagnostic Steps:**
-
-1. Check logs for errors:
+1. Check logs:
    ```bash
    journalctl --user -u llama-cpp-server -n 50
    ```
 
-2. Verify config.json is valid JSON:
+2. Verify binary exists:
    ```bash
-   python3 -c "import json; json.load(open('/home/samo/Data/Programs/AI/llama-cpp-server/config.json'))"
+   ls -la bin/llama-server
+   ```
+   If missing, run `./install.sh` to build it.
+
+3. Verify config.json is valid:
+   ```bash
+   python3 -c "import json; json.load(open('config.json'))"
    ```
 
-3. Check if port 8080 is already in use:
+4. Check if ports 8080/8081 are in use:
    ```bash
-   sudo ss -tlnp | grep :8080
-   ```
-
-4. Verify virtual environment exists:
-   ```bash
-   ls -la /home/samo/Data/Programs/AI/llama-cpp-server/venv/
+   ss -tlnp | grep -E ':808[01]'
    ```
 
 5. Test running manually:
    ```bash
-   cd /home/samo/Data/Programs/AI/llama-cpp-server
-   source venv/bin/activate
-   python server.py
+   python3 launcher.py
    ```
-
-**Common Causes:**
-
-- Invalid JSON in config.json (syntax error, trailing comma)
-- Port 8080 already in use by another service
-- Virtual environment missing or corrupted
-- Models directory doesn't exist or is inaccessible
-- Permission issues on service files
-
-### Port already in use
-
-**Symptoms:** "Address already in use" error in logs
-
-**Solution:**
-
-```bash
-# Find what's using port 8080
-sudo lsof -i :8080
-
-# Kill the conflicting process (replace PID)
-sudo kill PID
-
-# Or change port in config.json and restart
-```
 
 ### Model fails to load
 
-**Symptoms:** 404 or 500 errors when making API requests
-
-**Diagnostic Steps:**
-
-1. Check if model file exists:
+1. Check model file exists:
    ```bash
    ls -la /mnt/DataShare/Models/LLM/
    ```
 
-2. Verify model name matches (case-sensitive, can omit .gguf extension):
+2. List available models:
    ```bash
    curl http://localhost:8080/v1/models
    ```
 
-3. Check logs for specific error:
+3. Check for architecture support — if a model uses a new architecture, rebuild:
    ```bash
-   journalctl --user -u llama-cpp-server -n 50 | grep -i error
+   ./install.sh
    ```
-
-**Common Causes:**
-
-- Model file doesn't exist in models_directory
-- Insufficient RAM/VRAM to load model
-- Corrupted .gguf file
-- models_directory path incorrect in config
 
 ### Out of memory (OOM)
 
-**Symptoms:** Service crashes, "out of memory" in logs, system becomes unresponsive
+- Reduce context: set `n_ctx` lower in model_settings
+- Reduce GPU layers: set `n_gpu_layers` to a number instead of -1
+- Use `override_tensor` to offload MoE experts to CPU
+- Use a smaller quantization
 
-**Solutions:**
+### CORS errors
 
-1. Reduce context window:
-   ```json
-   "n_ctx": 8192
-   ```
+The CORS proxy allows all origins by default. If you still see CORS errors, check that requests go to port 8080 (proxy), not 8081 (llama-server directly).
 
-2. Reduce GPU layers (offload less to VRAM):
-   ```json
-   "n_gpu_layers": 20
-   ```
+### Updating llama.cpp
 
-3. Use a smaller/more quantized model
-
-4. Unload unused models:
-   ```bash
-   curl -X POST http://localhost:8080/admin/unload -H "Content-Type: application/json" -d '{"model": "all"}'
-   ```
-
-### High memory usage
-
-**Symptoms:** Service consuming excessive RAM even when idle
-
-**Diagnostic:**
-
+To get support for new model architectures:
 ```bash
-# Check memory usage
-ps aux | grep server.py
-
-# Check which models are loaded
-curl http://localhost:8080/health
+./install.sh   # pulls latest llama.cpp and rebuilds
+systemctl --user restart llama-cpp-server
 ```
-
-**Solution:**
-
-Models stay loaded until idle_timeout expires. To free memory immediately:
-
-```bash
-curl -X POST http://localhost:8080/admin/unload -H "Content-Type: application/json" -d '{"model": "all"}'
-```
-
-Or reduce idle_timeout in config.json.
-
-### Service keeps restarting
-
-**Symptoms:** Service restarts in a loop
-
-**Diagnostic:**
-
-```bash
-# View restart count
-systemctl --user show llama-cpp-server --property=NRestarts
-
-# Check for crash reason
-journalctl --user -u llama-cpp-server --since "10 minutes ago"
-```
-
-**Common Causes:**
-
-- Repeated OOM crashes
-- Invalid configuration causing startup failure
-- Model loading crash
-
-### Slow responses
-
-**Symptoms:** API responses take very long
-
-**Possible Causes & Solutions:**
-
-1. **Model not using GPU:**
-   - Check n_gpu_layers is set to -1 (all layers)
-   - Verify CUDA version of llama-cpp-python is installed
-
-2. **Context too large:**
-   - Reduce n_ctx in config
-
-3. **First request loads model:**
-   - This is expected behavior (lazy loading)
-   - Subsequent requests will be faster
-
-4. **CPU-only inference:**
-   - Reinstall with CUDA support:
-     ```bash
-     source venv/bin/activate
-     CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
-     ```
-
-### CORS errors in browser
-
-**Symptoms:** Browser console shows CORS errors
-
-**Solution:**
-
-Add your frontend's origin to config.json:
-
-```json
-"cors_origins": ["http://localhost:5000", "http://localhost:3000"]
-```
-
-Then restart the service.
 
 ## Health Checks
 
-### HTTP Health Endpoint
-
 ```bash
+# Health endpoint
 curl http://localhost:8080/health
-```
 
-Expected response:
-```json
-{
-  "status": "ok",
-  "loaded_models": ["Qwen3-8B-Q8_0"],
-  "uptime": 3600
-}
-```
-
-### Process Check
-
-```bash
-# Check if service is active
-systemctl --user is-active llama-cpp-server
-
-# Check if process is running
-pgrep -f "python server.py"
-```
-
-### API Test
-
-```bash
-# List available models
+# List models
 curl http://localhost:8080/v1/models
 
-# Simple chat test
+# Chat test
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "Qwen3-8B-Q8_0", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}'
 ```
-
-## Dependencies
-
-### System Packages
-
-- `python3` (3.8+) - Python runtime
-- `python3-venv` - Virtual environment support
-- NVIDIA drivers + CUDA (optional, for GPU acceleration)
-
-### Python Packages
-
-- `Flask` - Web framework
-- `Flask-CORS` - CORS support
-- `llama-cpp-python` - llama.cpp Python bindings
-- `python-dotenv` - Environment variable support
-
-### Runtime Requirements
-
-- Python 3.8+
-- systemd (for service management)
-- Sufficient RAM (8GB+ recommended, depends on model size)
-- NVIDIA GPU with CUDA (optional, for GPU acceleration)
 
 ## File Locations
 
 | File | Path |
 |------|------|
 | Service root | /home/samo/Data/Programs/AI/llama-cpp-server |
-| Configuration | /home/samo/Data/Programs/AI/llama-cpp-server/config.json |
+| Configuration | config.json |
+| Binary | bin/llama-server |
 | Systemd unit | ~/.config/systemd/user/llama-cpp-server.service (symlink) |
-| Virtual env | /home/samo/Data/Programs/AI/llama-cpp-server/venv |
-| Models | /mnt/DataShare/Models/LLM (configurable) |
+| Models | /mnt/DataShare/Models/LLM |
 | Logs | journalctl --user -u llama-cpp-server |
 
 ## API Endpoints
 
+All provided by llama-server natively:
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check with loaded models and uptime |
+| `/health` | GET | Health check |
 | `/v1/models` | GET | List available models |
-| `/v1/chat/completions` | POST | OpenAI-compatible chat completions |
-| `/admin/unload` | POST | Manually unload model(s) |
-| `/admin/reload` | POST | Hot-reload configuration |
-
-### Chat Completions Request Format
-
-```json
-{
-  "model": "Qwen3-8B-Q8_0",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Hello!"}
-  ],
-  "temperature": 0.7,
-  "max_tokens": 2048,
-  "stream": false
-}
-```
-
-## Maintenance
-
-### Backup Configuration
-
-```bash
-cp /home/samo/Data/Programs/AI/llama-cpp-server/config.json \
-   /home/samo/Data/Programs/AI/llama-cpp-server/config.json.bak
-```
-
-### Update Service
-
-```bash
-cd /home/samo/Data/Programs/AI/llama-cpp-server
-git pull
-./install.sh
-systemctl --user restart llama-cpp-server
-```
-
-### Reinstall with GPU Support
-
-```bash
-cd /home/samo/Data/Programs/AI/llama-cpp-server
-source venv/bin/activate
-CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
-systemctl --user restart llama-cpp-server
-```
-
-### Add New Models
-
-1. Copy .gguf files to models_directory
-2. Reload configuration:
-   ```bash
-   curl -X POST http://localhost:8080/admin/reload
-   ```
-3. Verify model appears:
-   ```bash
-   curl http://localhost:8080/v1/models
-   ```
+| `/v1/chat/completions` | POST | Chat completions (streaming supported) |
+| `/v1/completions` | POST | Text completions |
+| `/v1/embeddings` | POST | Embeddings |
+| `/tokenize` | POST | Tokenization |
+| `/detokenize` | POST | Detokenization |
+| `/models/load` | POST | Load a model |
+| `/models/unload` | POST | Unload a model |
+| `/slots` | GET | View active slots |
+| `/metrics` | GET | Prometheus metrics |

@@ -16,13 +16,11 @@ echo "Removing systemd service..."
 rm -f ~/.config/systemd/user/"$SERVICE_NAME"
 systemctl --user daemon-reload
 
-# Ask about virtual environment
-read -p "Remove Python virtual environment (venv)? (y/N): " remove_venv
-if [[ "$remove_venv" =~ ^[Yy]$ ]]; then
-    if [ -d "$SCRIPT_DIR/venv" ]; then
-        echo "Removing virtual environment..."
-        rm -rf "$SCRIPT_DIR/venv"
-    fi
+# Ask about build artifacts
+read -p "Remove build artifacts (vendor/ and bin/)? (y/N): " remove_build
+if [[ "$remove_build" =~ ^[Yy]$ ]]; then
+    echo "Removing build artifacts..."
+    rm -rf "$SCRIPT_DIR/vendor" "$SCRIPT_DIR/bin"
 fi
 
 # Ask about config

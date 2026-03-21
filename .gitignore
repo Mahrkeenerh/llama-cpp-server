@@ -1,17 +1,20 @@
+# Build artifacts
+vendor/
+bin/
+build/
+
+# Generated at runtime
+models.preset
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-*.egg-info/
-dist/
-build/
 
-# Virtual environments
+# Virtual environments (legacy)
 venv/
 env/
-ENV/
 
 # IDE
 .vscode/

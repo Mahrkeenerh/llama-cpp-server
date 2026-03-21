@@ -6,58 +6,67 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "=== Installing llama-cpp-server ==="
 
 # Check dependencies
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is required"
-    exit 1
-fi
+for cmd in python3 cmake git; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "Error: $cmd is required"
+        exit 1
+    fi
+done
 
-# Create virtual environment if needed
-if [ ! -d "$SCRIPT_DIR/venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv "$SCRIPT_DIR/venv"
+# Clone or update llama.cpp
+if [ ! -d "$SCRIPT_DIR/vendor/llama.cpp" ]; then
+    echo "Cloning llama.cpp..."
+    mkdir -p "$SCRIPT_DIR/vendor"
+    git clone git@github.com:ggml-org/llama.cpp.git "$SCRIPT_DIR/vendor/llama.cpp"
 else
-    echo "Virtual environment already exists"
+    echo "Updating llama.cpp..."
+    git -C "$SCRIPT_DIR/vendor/llama.cpp" pull
 fi
 
-# Upgrade pip
-echo "Upgrading pip..."
-"$SCRIPT_DIR/venv/bin/pip" install --upgrade pip
-
-# Install base requirements
-echo "Installing base requirements..."
-"$SCRIPT_DIR/venv/bin/pip" install Flask Flask-CORS python-dotenv
-
-# Check for CUDA support
+# Build type selection
 echo ""
-echo "Select installation type:"
+echo "Select build type:"
 echo "1) CPU only"
 echo "2) NVIDIA GPU (CUDA)"
 echo "3) Apple Silicon (Metal)"
 read -p "Enter choice [1-3]: " choice
 
+CMAKE_ARGS=""
 case $choice in
     1)
-        echo "Installing llama-cpp-python (CPU only)..."
-        "$SCRIPT_DIR/venv/bin/pip" install llama-cpp-python==0.2.85
+        echo "Building for CPU..."
+        CMAKE_ARGS=""
         ;;
     2)
-        echo "Installing llama-cpp-python with CUDA support..."
-        CMAKE_ARGS="-DGGML_CUDA=on" "$SCRIPT_DIR/venv/bin/pip" install llama-cpp-python==0.2.85 --force-reinstall --no-cache-dir
+        echo "Building with CUDA support..."
+        CMAKE_ARGS="-DGGML_CUDA=on"
         ;;
     3)
-        echo "Installing llama-cpp-python with Metal support..."
-        CMAKE_ARGS="-DGGML_METAL=on" "$SCRIPT_DIR/venv/bin/pip" install llama-cpp-python==0.2.85 --force-reinstall --no-cache-dir
+        echo "Building with Metal support..."
+        CMAKE_ARGS="-DGGML_METAL=on"
         ;;
     *)
-        echo "Invalid choice, installing CPU version..."
-        "$SCRIPT_DIR/venv/bin/pip" install llama-cpp-python==0.2.85
+        echo "Invalid choice"
+        exit 1
         ;;
 esac
 
-# Install systemd user service (copy)
+# Build llama-server
+echo "Building llama-server..."
+cd "$SCRIPT_DIR/vendor/llama.cpp"
+cmake -B build $CMAKE_ARGS
+cmake --build build --target llama-server -j$(nproc)
+
+# Install binary
+mkdir -p "$SCRIPT_DIR/bin"
+cp build/bin/llama-server "$SCRIPT_DIR/bin/llama-server"
+echo "Binary installed to bin/llama-server"
+cd "$SCRIPT_DIR"
+
+# Install systemd user service
 echo "Installing systemd user service..."
 mkdir -p ~/.config/systemd/user
-cp "$SCRIPT_DIR/systemd/llama-cpp-server.service" ~/.config/systemd/user/
+ln -sf "$SCRIPT_DIR/systemd/llama-cpp-server.service" ~/.config/systemd/user/
 systemctl --user daemon-reload
 
 echo ""
