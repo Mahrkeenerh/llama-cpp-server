@@ -21,7 +21,7 @@
       "n_ctx": 8192
     },
     "gpt-oss-20b-Q8_0": {
-      "n_ctx": 12288
+      "n_ctx": 49152
     },
     "gpt-oss-20b-Q8_0-128k": {
       "file": "gpt-oss-20b-Q8_0.gguf",
