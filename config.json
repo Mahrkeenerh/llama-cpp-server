@@ -20,24 +20,19 @@
     "Qwen3-14B-Q6_K": {
       "n_ctx": 8192
     },
-    "Qwen3-14B-Q4_K_M": {
-      "n_ctx": 16384
-    },
-    "Qwen3-30B-A3B-Q6_K": {
-      "n_ctx": 16384,
-      "override_tensor": ".ffn_.*_exps.=CPU"
-    },
     "gpt-oss-20b-Q8_0": {
       "n_ctx": 12288
     },
     "gpt-oss-20b-Q8_0-128k": {
       "file": "gpt-oss-20b-Q8_0.gguf",
-      "n_ctx": 131072,
-      "override_tensor": ".ffn_.*_exps.=CPU"
+      "n_ctx": 131072
     },
     "Qwen3.5-35B-A3B-Q6_K": {
-      "n_ctx": 16384,
-      "override_tensor": ".ffn_.*_exps.=CPU"
+      "n_ctx": 16384
+    },
+    "Qwen3.5-35B-A3B-Q6_K-256k": {
+      "file": "Qwen3.5-35B-A3B-Q6_K.gguf",
+      "n_ctx": 262144
     }
   },
   "_comments": {

@@ -106,6 +106,7 @@ def build_llama_server_cmd(config):
         "--models-preset", PRESET_PATH,
         "--sleep-idle-seconds", str(mm.get("idle_timeout", 300)),
         "--models-max", "1",
+        "--slot-prompt-similarity", "0.5",
     ]
 
     return cmd
@@ -115,6 +116,8 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
     """Reverse proxy that adds CORS headers to llama-server responses."""
 
     upstream = f"http://127.0.0.1:{INTERNAL_PORT}"
+    _current_model = None
+    _model_lock = threading.Lock()
 
     def log_message(self, format, *args):
         # Suppress default access logs (llama-server logs its own)
@@ -139,12 +142,54 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
+    def _ensure_model_unloaded(self, requested_model):
+        """Pre-unload the current model if switching to a different one."""
+        with self._model_lock:
+            if self._current_model and self._current_model != requested_model:
+                try:
+                    unload_req = urllib.request.Request(
+                        f"{self.upstream}/models/unload",
+                        data=json.dumps({"model": self._current_model}).encode(),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(unload_req, timeout=30) as resp:
+                        resp.read()
+                except Exception:
+                    pass
+                # Wait for VRAM to be freed
+                import time
+                for _ in range(30):
+                    try:
+                        models_req = urllib.request.Request(f"{self.upstream}/v1/models")
+                        with urllib.request.urlopen(models_req, timeout=5) as resp:
+                            data = json.loads(resp.read())
+                            for m in data.get("data", []):
+                                if m["id"] == self._current_model:
+                                    if m.get("status", {}).get("value") == "unloaded":
+                                        CORSProxyHandler._current_model = None
+                                        return
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                CORSProxyHandler._current_model = None
+
     def _proxy(self):
         url = f"{self.upstream}{self.path}"
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else None
+
+        # Pre-unload if switching models (for endpoints that trigger model loading)
+        if body and self.command == "POST" and any(p in self.path for p in ["/chat/completions", "/completions", "/tokenize"]):
+            try:
+                req_json = json.loads(body)
+                requested_model = req_json.get("model")
+                if requested_model:
+                    self._ensure_model_unloaded(requested_model)
+            except (json.JSONDecodeError, KeyError):
+                pass
 
         req = urllib.request.Request(
             url,
@@ -155,6 +200,15 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
 
         try:
             with urllib.request.urlopen(req) as resp:
+                # Track loaded model on successful model-loading requests
+                if resp.status == 200 and body and self.command == "POST":
+                    try:
+                        req_json = json.loads(body)
+                        if req_json.get("model"):
+                            CORSProxyHandler._current_model = req_json["model"]
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
                 self.send_response(resp.status)
                 # Forward headers, add CORS
                 for key, value in resp.getheaders():
@@ -168,8 +222,11 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
                     chunk = resp.read(4096)
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except BrokenPipeError:
+                        break
 
         except urllib.error.HTTPError as e:
             self.send_response(e.code)
