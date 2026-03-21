@@ -11,7 +11,7 @@ echo "Stopping service..."
 systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
 systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
 
-# Remove systemd symlink
+# Remove systemd unit file
 echo "Removing systemd service..."
 rm -f ~/.config/systemd/user/"$SERVICE_NAME"
 systemctl --user daemon-reload

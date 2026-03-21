@@ -54,10 +54,10 @@ case $choice in
         ;;
 esac
 
-# Install systemd user service (symlink)
+# Install systemd user service (copy)
 echo "Installing systemd user service..."
 mkdir -p ~/.config/systemd/user
-ln -sf "$SCRIPT_DIR/systemd/llama-cpp-server.service" ~/.config/systemd/user/
+cp "$SCRIPT_DIR/systemd/llama-cpp-server.service" ~/.config/systemd/user/
 systemctl --user daemon-reload
 
 echo ""
