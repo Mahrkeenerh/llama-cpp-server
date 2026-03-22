@@ -25,6 +25,59 @@ BINARY_PATH = os.path.join(SCRIPT_DIR, "bin", "llama-server")
 # Internal port for llama-server; proxy listens on the public port
 INTERNAL_PORT = 8081
 
+# If other processes (not llama-server) use >= this much GPU VRAM, reject requests
+GPU_BUSY_THRESHOLD_MIB = 6144
+
+
+def _get_descendant_pids(root_pid):
+    """Return a set of all PIDs in the process tree rooted at root_pid."""
+    pids = {root_pid}
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(root_pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            child = int(line.strip())
+            pids |= _get_descendant_pids(child)
+    except Exception:
+        pass
+    return pids
+
+
+def get_other_gpu_usage_mib(exclude_pid):
+    """Return GPU memory (MiB) used by everything except exclude_pid and its children."""
+    try:
+        # Get total GPU memory used
+        gpu_result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if gpu_result.returncode != 0:
+            return 0
+        total_used = int(gpu_result.stdout.strip().splitlines()[0].strip())
+
+        # Get llama-server tree usage from compute apps
+        exclude_pids = _get_descendant_pids(exclude_pid) if exclude_pid else set()
+        app_result = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        llama_usage = 0
+        if app_result.returncode == 0:
+            for line in app_result.stdout.strip().splitlines():
+                parts = line.split(",")
+                if len(parts) != 2:
+                    continue
+                pid, mem = int(parts[0].strip()), int(parts[1].strip())
+                if pid in exclude_pids:
+                    llama_usage += mem
+
+        return total_used - llama_usage
+    except Exception:
+        return 0
+
 
 def load_config():
     with open(CONFIG_PATH) as f:
@@ -118,6 +171,7 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
     upstream = f"http://127.0.0.1:{INTERNAL_PORT}"
     _current_model = None
     _model_lock = threading.Lock()
+    _llama_pid = None
 
     def log_message(self, format, *args):
         # Suppress default access logs (llama-server logs its own)
@@ -174,8 +228,34 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
                     time.sleep(1)
                 CORSProxyHandler._current_model = None
 
+    def _gpu_busy_response(self):
+        """Send a 503 when GPU is occupied by other processes."""
+        self.send_response(503)
+        self._cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "error": {
+                "code": 503,
+                "message": "GPU is busy with other workloads (training, etc.) — try again later",
+                "type": "unavailable_error",
+            }
+        }).encode())
+
+    # Endpoints that trigger model loading / inference
+    _INFERENCE_PATHS = ("/chat/completions", "/completions", "/embeddings",
+                        "/tokenize", "/detokenize", "/models/load")
+
     def _proxy(self):
         url = f"{self.upstream}{self.path}"
+
+        # Block inference requests when GPU is occupied by external processes
+        if self.command == "POST" and any(p in self.path for p in self._INFERENCE_PATHS):
+            other_usage = get_other_gpu_usage_mib(self._llama_pid or 0)
+            if other_usage >= GPU_BUSY_THRESHOLD_MIB:
+                print(f"[GPU busy] Rejecting {self.path} — other processes using {other_usage} MiB", flush=True)
+                self._gpu_busy_response()
+                return
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
@@ -265,6 +345,7 @@ def main():
 
     # Start llama-server as child process
     llama_proc = subprocess.Popen(cmd)
+    CORSProxyHandler._llama_pid = llama_proc.pid
 
     # Forward signals to child
     def shutdown(signum, frame):
