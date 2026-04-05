@@ -23,30 +23,38 @@ else
     git -C "$SCRIPT_DIR/vendor/llama.cpp" pull
 fi
 
-# Build type selection
-echo ""
-echo "Select build type:"
-echo "1) CPU only"
-echo "2) NVIDIA GPU (CUDA)"
-echo "3) Apple Silicon (Metal)"
-read -p "Enter choice [1-3]: " choice
+# Build type selection (accepts CLI arg or interactive prompt)
+BUILD_TYPE="${1:-}"
+if [ -z "$BUILD_TYPE" ]; then
+    echo ""
+    echo "Select build type:"
+    echo "1) CPU only"
+    echo "2) NVIDIA GPU (CUDA)"
+    echo "3) Apple Silicon (Metal)"
+    read -p "Enter choice [1-3]: " choice
+    case $choice in
+        1) BUILD_TYPE="cpu" ;;
+        2) BUILD_TYPE="cuda" ;;
+        3) BUILD_TYPE="metal" ;;
+        *) echo "Invalid choice"; exit 1 ;;
+    esac
+fi
 
 CMAKE_ARGS=""
-case $choice in
-    1)
+case $BUILD_TYPE in
+    cpu)
         echo "Building for CPU..."
-        CMAKE_ARGS=""
         ;;
-    2)
+    cuda)
         echo "Building with CUDA support..."
         CMAKE_ARGS="-DGGML_CUDA=on"
         ;;
-    3)
+    metal)
         echo "Building with Metal support..."
         CMAKE_ARGS="-DGGML_METAL=on"
         ;;
     *)
-        echo "Invalid choice"
+        echo "Unknown build type: $BUILD_TYPE (use cpu, cuda, or metal)"
         exit 1
         ;;
 esac
