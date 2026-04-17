@@ -16,6 +16,9 @@ __pycache__/
 venv/
 env/
 
+# Local-only docs
+SERVICE_IMPLEMENTATION_GUIDE.md
+
 # IDE
 .vscode/
 .idea/
