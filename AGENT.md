@@ -75,7 +75,24 @@ ss -tlnp | grep -E ':808[01]'
 | `model_manager.n_threads` | CPU threads | 8 |
 | `model_manager.override_tensor` | Tensor override pattern | null |
 | `model_manager.offload_kqv` | KV cache on GPU | true |
+| `model_manager.parallel` | Concurrent slots (np) | 1 |
 | `model_settings.<name>` | Per-model overrides | {} |
+
+### Per-model override fields (in `model_settings.<name>`)
+
+| Field | Preset key | Purpose |
+|-------|-----------|---------|
+| `file` | `model` | Alias another .gguf |
+| `n_ctx` | `c` | Context size |
+| `n_gpu_layers` | `n-gpu-layers` | GPU layer count |
+| `n_threads` | `t` | CPU threads |
+| `override_tensor` | `override-tensor` | Pattern-based tensor placement |
+| `offload_kqv: false` | `no-kv-offload = true` | KV cache in CPU RAM |
+| `n_cpu_moe` | `n-cpu-moe` | MoE: first N layers' experts on CPU |
+| `cache_type_k` | `cache-type-k` | `q8_0` halves K cache memory |
+| `cache_type_v` | `cache-type-v` | `q8_0` halves V cache memory |
+| `parallel` | `np` | Concurrent slots |
+| `fit` | `fit` | Auto-offload to fit in VRAM (MoE) |
 
 ### After Changing Config
 
@@ -135,8 +152,11 @@ Config changes take effect on restart (launcher regenerates models.preset).
 ### Out of memory (OOM)
 
 - Reduce context: set `n_ctx` lower in model_settings
-- Reduce GPU layers: set `n_gpu_layers` to a number instead of -1
-- Use `override_tensor` to offload MoE experts to CPU
+- Enable `cache_type_k`/`cache_type_v: "q8_0"` to halve KV cache memory
+- For MoE models, set `fit: true` so llama-server auto-offloads experts to CPU
+- For MoE models, set `n_cpu_moe: N` to pin the offload split (first N layers' experts on CPU)
+- Reduce parallel slots: `parallel: 1` minimizes recurrent-state memory
+- Reduce GPU layers manually: set `n_gpu_layers` to a number instead of -1
 - Use a smaller quantization
 
 ### CORS errors
@@ -163,7 +183,7 @@ curl http://localhost:8080/v1/models
 # Chat test
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "Qwen3-8B-Q8_0", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}'
+  -d '{"model": "gpt-oss-20b-Q8_0", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}'
 ```
 
 ## File Locations

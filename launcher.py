@@ -107,6 +107,21 @@ def generate_preset(config):
     if mm.get("override_tensor"):
         lines.append(f"override-tensor = {mm['override_tensor']}")
 
+    if "n_cpu_moe" in mm:
+        lines.append(f"n-cpu-moe = {mm['n_cpu_moe']}")
+
+    if "cache_type_k" in mm:
+        lines.append(f"cache-type-k = {mm['cache_type_k']}")
+
+    if "cache_type_v" in mm:
+        lines.append(f"cache-type-v = {mm['cache_type_v']}")
+
+    if "parallel" in mm:
+        lines.append(f"np = {mm['parallel']}")
+
+    if "fit" in mm:
+        lines.append(f"fit = {'on' if mm['fit'] else 'off'}")
+
     lines.append("")
 
     # Per-model settings
@@ -135,6 +150,21 @@ def generate_preset(config):
         if "offload_kqv" in opts:
             if not opts["offload_kqv"]:
                 lines.append("no-kv-offload = true")
+
+        if "n_cpu_moe" in opts:
+            lines.append(f"n-cpu-moe = {opts['n_cpu_moe']}")
+
+        if "cache_type_k" in opts:
+            lines.append(f"cache-type-k = {opts['cache_type_k']}")
+
+        if "cache_type_v" in opts:
+            lines.append(f"cache-type-v = {opts['cache_type_v']}")
+
+        if "parallel" in opts:
+            lines.append(f"np = {opts['parallel']}")
+
+        if "fit" in opts:
+            lines.append(f"fit = {'on' if opts['fit'] else 'off'}")
 
         lines.append("")
 

@@ -90,6 +90,11 @@ All via `config.json`. Launcher generates `models.preset` at startup.
 | `n_threads` | `t` |
 | `override_tensor` | `override-tensor` |
 | `offload_kqv: false` | `no-kv-offload = true` |
+| `n_cpu_moe` | `n-cpu-moe` (MoE: keep first N layers' experts on CPU) |
+| `cache_type_k` | `cache-type-k` (e.g. `q8_0` halves K cache vs fp16) |
+| `cache_type_v` | `cache-type-v` (e.g. `q8_0` halves V cache vs fp16) |
+| `parallel` | `np` (concurrent slots; lower = less recurrent memory) |
+| `fit` | `fit` (`true`/`false`; auto-offload to keep model in VRAM) |
 
 ## Git Conventions
 
