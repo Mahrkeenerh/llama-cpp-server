@@ -258,6 +258,56 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
                     time.sleep(1)
                 CORSProxyHandler._current_model = None
 
+    def _handle_unload_all(self):
+        """Unload every currently-loaded model. Used when POST /models/unload has no model id."""
+        try:
+            models_req = urllib.request.Request(f"{self.upstream}/v1/models")
+            with urllib.request.urlopen(models_req, timeout=5) as resp:
+                data = json.loads(resp.read())
+        except Exception as e:
+            self.send_response(502)
+            self._cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": {"code": 502, "message": f"failed to list models: {e}",
+                          "type": "upstream_error"}
+            }).encode())
+            return
+
+        loaded = [m["id"] for m in data.get("data", [])
+                  if m.get("status", {}).get("value") == "loaded"]
+
+        unloaded = []
+        errors = []
+        for name in loaded:
+            try:
+                unload_req = urllib.request.Request(
+                    f"{self.upstream}/models/unload",
+                    data=json.dumps({"model": name}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(unload_req, timeout=30) as resp:
+                    resp.read()
+                unloaded.append(name)
+            except Exception as e:
+                errors.append({"model": name, "error": str(e)})
+
+        with self._model_lock:
+            if CORSProxyHandler._current_model in unloaded:
+                CORSProxyHandler._current_model = None
+
+        self.send_response(200)
+        self._cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "success": True,
+            "unloaded": unloaded,
+            "errors": errors,
+        }).encode())
+
     def _gpu_busy_response(self):
         """Send a 503 when GPU is occupied by other processes."""
         self.send_response(503)
@@ -290,6 +340,16 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else None
+
+        # POST /models/unload with no model id → unload everything currently loaded
+        if self.command == "POST" and self.path.rstrip("/") == "/models/unload":
+            try:
+                req_json = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                req_json = {}
+            if not req_json.get("model"):
+                self._handle_unload_all()
+                return
 
         # Pre-unload if switching models (for endpoints that trigger model loading)
         if body and self.command == "POST" and any(p in self.path for p in ["/chat/completions", "/completions", "/tokenize"]):
