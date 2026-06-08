@@ -1,0 +1,21 @@
+diff --git a/tools/server/server-models.cpp b/tools/server/server-models.cpp
+index a1eeec3..94f249b 100644
+--- a/tools/server/server-models.cpp
++++ b/tools/server/server-models.cpp
+@@ -633,8 +633,15 @@ void server_models::load(const std::string & name) {
+                 return is_stopping() || !subprocess_alive(child_proc.get());
+             };
+             {
++                // Poll periodically so subprocess_alive() runs even without an
++                // explicit cv_stop.notify_all(). subprocess_alive does
++                // waitpid(WNOHANG), which reaps a crashed child; otherwise the
++                // child becomes an unreaped zombie and proxy_request keeps
++                // forwarding to its dead port forever.
+                 std::unique_lock<std::mutex> lk(this->mutex);
+-                this->cv_stop.wait(lk, should_wake);
++                while (!should_wake()) {
++                    this->cv_stop.wait_for(lk, std::chrono::seconds(1));
++                }
+             }
+             // child may have already exited (e.g. crashed) — skip shutdown sequence
+             if (!subprocess_alive(child_proc.get())) {

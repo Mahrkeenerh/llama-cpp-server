@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -417,6 +418,55 @@ class CORSProxyHandler(BaseHTTPRequestHandler):
             }).encode())
 
 
+def unload_idle_models(upstream):
+    """Fully unload any model llama-server has parked in the 'sleeping' state.
+
+    llama-server's --sleep-idle-seconds puts idle models to sleep, which frees
+    compute buffers but keeps the weights resident in RAM plus residual VRAM.
+    We convert that sleeping state into a full unload so nothing hogs memory
+    while idle. The next request triggers a fresh (cold) load.
+
+    llama-server only sleeps a model once all its slots have been idle for the
+    timeout, so a 'sleeping' status is a safe, race-free signal to unload — it
+    is never sleeping mid-generation.
+    """
+    try:
+        req = urllib.request.Request(f"{upstream}/v1/models")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return
+
+    sleeping = [m["id"] for m in data.get("data", [])
+                if m.get("status", {}).get("value") == "sleeping"]
+
+    for name in sleeping:
+        try:
+            unload_req = urllib.request.Request(
+                f"{upstream}/models/unload",
+                data=json.dumps({"model": name}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(unload_req, timeout=30) as resp:
+                resp.read()
+            print(f"[idle-unload] Unloaded sleeping model: {name}", flush=True)
+        except Exception as e:
+            print(f"[idle-unload] Failed to unload {name}: {e}", flush=True)
+            continue
+
+        with CORSProxyHandler._model_lock:
+            if CORSProxyHandler._current_model == name:
+                CORSProxyHandler._current_model = None
+
+
+def _idle_unload_loop(upstream, interval):
+    """Background watcher: periodically unload models llama-server has slept."""
+    while True:
+        time.sleep(interval)
+        unload_idle_models(upstream)
+
+
 def main():
     config = load_config()
 
@@ -436,6 +486,18 @@ def main():
     # Start llama-server as child process
     llama_proc = subprocess.Popen(cmd)
     CORSProxyHandler._llama_pid = llama_proc.pid
+
+    # Background watcher: fully unload models once llama-server sleeps them,
+    # so idle models don't hog RAM/VRAM. Driven by idle_timeout (when llama
+    # sleeps) + check_interval (how often we poll for sleeping models).
+    poll_interval = config["model_manager"].get("check_interval", 60)
+    watcher = threading.Thread(
+        target=_idle_unload_loop,
+        args=(CORSProxyHandler.upstream, poll_interval),
+        daemon=True,
+    )
+    watcher.start()
+    print(f"Idle-unload watcher started (polling every {poll_interval}s)", flush=True)
 
     # Forward signals to child
     def shutdown(signum, frame):

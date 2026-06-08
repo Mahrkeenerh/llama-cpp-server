@@ -20,7 +20,21 @@ if [ ! -d "$SCRIPT_DIR/vendor/llama.cpp" ]; then
     git clone git@github.com:ggml-org/llama.cpp.git "$SCRIPT_DIR/vendor/llama.cpp"
 else
     echo "Updating llama.cpp..."
+    git -C "$SCRIPT_DIR/vendor/llama.cpp" checkout -- .
     git -C "$SCRIPT_DIR/vendor/llama.cpp" pull
+fi
+
+# Apply local patches against vendored llama.cpp
+if [ -d "$SCRIPT_DIR/patches" ]; then
+    shopt -s nullglob
+    for patch in "$SCRIPT_DIR/patches"/*.patch; do
+        echo "Applying patch: $(basename "$patch")"
+        if ! git -C "$SCRIPT_DIR/vendor/llama.cpp" apply "$patch"; then
+            echo "Error: failed to apply $(basename "$patch")"
+            exit 1
+        fi
+    done
+    shopt -u nullglob
 fi
 
 # Build type selection (accepts CLI arg or interactive prompt)
